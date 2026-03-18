@@ -1,0 +1,9 @@
+{
+  "name": "star_k1_3_positive",
+  "vertices": ["c", "l1", "l2", "l3"],
+  "edges": [
+    {"id": "e1", "u": "c", "v": "l1", "sign": "+"},
+    {"id": "e2", "u": "c", "v": "l2", "sign": "+"},
+    {"id": "e3", "u": "c", "v": "l3", "sign": "+"}
+  ]
+}

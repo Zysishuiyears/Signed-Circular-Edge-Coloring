@@ -1,0 +1,8 @@
+{
+  "mode": "decide",
+  "instance_path": "../data/instances/star_k1_3_positive.json",
+  "r": "3",
+  "timeout_ms": 10000,
+  "output_dir": "../artifacts/runs",
+  "backend": "z3"
+}

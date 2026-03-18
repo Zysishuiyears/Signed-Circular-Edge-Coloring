@@ -1,0 +1,7 @@
+{
+  "name": "single_positive_edge",
+  "vertices": ["u", "v"],
+  "edges": [
+    {"id": "e1", "u": "u", "v": "v", "sign": "+"}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "cycle_c4_one_negative",
+  "vertices": ["v1", "v2", "v3", "v4"],
+  "edges": [
+    {"id": "e1", "u": "v1", "v": "v2", "sign": "-"},
+    {"id": "e2", "u": "v2", "v": "v3", "sign": "+"},
+    {"id": "e3", "u": "v3", "v": "v4", "sign": "+"},
+    {"id": "e4", "u": "v4", "v": "v1", "sign": "+"}
+  ]
+}

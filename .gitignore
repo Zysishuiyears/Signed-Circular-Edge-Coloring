@@ -1,0 +1,11 @@
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+.coverage
+build/
+dist/
+*.egg-info/
+
+artifacts/runs/*
+!artifacts/runs/.gitignore
