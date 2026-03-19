@@ -7,8 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from signedcoloring.models import (
+    ClassificationRequest,
+    ClassificationResult,
     DecisionResult,
     OptimizationResult,
+    SignatureClassEntry,
     SignedEdge,
     SignedGraphInstance,
     SolveRequest,
@@ -109,6 +112,35 @@ def load_request(path: str | Path, *, default_mode: str | None = None) -> SolveR
     return request_from_payload(payload, base_dir=source.parent, default_mode=default_mode)
 
 
+def classification_request_from_payload(
+    payload: dict[str, Any],
+    *,
+    base_dir: Path | None = None,
+) -> ClassificationRequest:
+    mode = payload.get("mode", "classify-signatures")
+    if mode != "classify-signatures":
+        raise ValueError(f"Unsupported classification request mode: {mode!r}.")
+
+    return ClassificationRequest(
+        instance_path=_resolve_path(payload["instance_path"], base_dir),
+        classification_mode=payload.get("classification_mode", "switching-only"),
+        k=payload.get("k"),
+        limit=payload.get("limit"),
+        emit_representatives=payload.get("emit_representatives", False),
+        output_dir=(
+            _resolve_path(payload["output_dir"], base_dir)
+            if payload.get("output_dir") is not None
+            else Path("artifacts/runs")
+        ),
+    )
+
+
+def load_classification_request(path: str | Path) -> ClassificationRequest:
+    source = Path(path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    return classification_request_from_payload(payload, base_dir=source.parent)
+
+
 def dump_request(request: SolveRequest) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "mode": request.mode,
@@ -120,6 +152,21 @@ def dump_request(request: SolveRequest) -> dict[str, Any]:
         payload["r"] = fraction_to_string(request.r)
     if request.timeout_ms is not None:
         payload["timeout_ms"] = request.timeout_ms
+    return payload
+
+
+def dump_classification_request(request: ClassificationRequest) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "mode": "classify-signatures",
+        "instance_path": str(request.instance_path),
+        "classification_mode": request.classification_mode,
+        "emit_representatives": request.emit_representatives,
+        "output_dir": str(request.output_dir),
+    }
+    if request.k is not None:
+        payload["k"] = request.k
+    if request.limit is not None:
+        payload["limit"] = request.limit
     return payload
 
 
@@ -188,6 +235,57 @@ def verification_payload(result: VerificationResult) -> dict[str, Any]:
         "valid": result.valid,
         "messages": list(result.messages),
         "stats": to_jsonable(result.stats),
+    }
+
+
+def classification_summary_payload(result: ClassificationResult) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "graph_name": result.graph_name,
+        "classification_mode": result.classification_mode,
+        "num_vertices": result.num_vertices,
+        "num_edges": result.num_edges,
+        "num_components": result.num_components,
+        "cycle_rank": result.cycle_rank,
+        "theoretical_switching_class_count": result.theoretical_switching_class_count,
+        "switching_class_count": result.switching_class_count,
+        "bit_convention": result.bit_convention,
+        "representative_encoding": "bitstring over edge_order",
+        "cycle_bit_encoding": "bitstring over non-tree edges after forest canonicalization",
+        "edge_order": list(result.edge_order),
+        "k_filter_applied": result.k is not None,
+        "stats": to_jsonable(result.stats),
+    }
+    if result.combined_class_count is not None:
+        payload["combined_class_count"] = result.combined_class_count
+    if result.k is not None:
+        payload["k"] = result.k
+    return payload
+
+
+def _class_entry_payload(entry: SignatureClassEntry) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "class_id": entry.class_id,
+        "representative_code": entry.representative_code,
+        "cycle_bit_code": entry.cycle_bit_code,
+        "representative_bits": list(entry.representative_bits),
+        "representative_signs_by_edge_id": dict(entry.representative_signs_by_edge_id),
+    }
+    if entry.switching_orbit_size is not None:
+        payload["switching_orbit_size"] = entry.switching_orbit_size
+    if entry.automorphism_orbit_size is not None:
+        payload["automorphism_orbit_size"] = entry.automorphism_orbit_size
+    if entry.reachable_negative_edge_counts is not None:
+        payload["reachable_negative_edge_counts"] = list(entry.reachable_negative_edge_counts)
+    return payload
+
+
+def classification_classes_payload(result: ClassificationResult) -> dict[str, Any]:
+    return {
+        "graph_name": result.graph_name,
+        "classification_mode": result.classification_mode,
+        "bit_convention": result.bit_convention,
+        "edge_order": list(result.edge_order),
+        "classes": [_class_entry_payload(entry) for entry in result.classes],
     }
 
 

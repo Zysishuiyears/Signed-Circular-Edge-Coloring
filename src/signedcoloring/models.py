@@ -9,6 +9,7 @@ import networkx as nx
 
 Sign = Literal["+", "-"]
 Mode = Literal["decide", "optimize"]
+ClassificationMode = Literal["switching-only", "switching+automorphism"]
 
 
 @dataclass(frozen=True)
@@ -138,4 +139,52 @@ class OptimizationResult:
 class VerificationResult:
     valid: bool
     messages: tuple[str, ...]
+    stats: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ClassificationRequest:
+    instance_path: Path
+    classification_mode: ClassificationMode = "switching-only"
+    k: int | None = None
+    limit: int | None = None
+    emit_representatives: bool = False
+    output_dir: Path = Path("artifacts/runs")
+
+    def __post_init__(self) -> None:
+        if self.classification_mode not in {"switching-only", "switching+automorphism"}:
+            raise ValueError(f"Unsupported classification mode: {self.classification_mode!r}.")
+        if self.k is not None and self.k < 0:
+            raise ValueError("k must be non-negative when provided.")
+        if self.limit is not None and self.limit <= 0:
+            raise ValueError("limit must be positive when provided.")
+
+
+@dataclass(frozen=True)
+class SignatureClassEntry:
+    class_id: str
+    representative_code: str
+    cycle_bit_code: str
+    representative_bits: tuple[int, ...]
+    representative_signs_by_edge_id: dict[str, Sign]
+    switching_orbit_size: int | None = None
+    automorphism_orbit_size: int | None = None
+    reachable_negative_edge_counts: tuple[int, ...] | None = None
+
+
+@dataclass(frozen=True)
+class ClassificationResult:
+    graph_name: str
+    classification_mode: ClassificationMode
+    num_vertices: int
+    num_edges: int
+    num_components: int
+    cycle_rank: int
+    theoretical_switching_class_count: int
+    switching_class_count: int
+    combined_class_count: int | None
+    k: int | None
+    bit_convention: str
+    edge_order: tuple[str, ...]
+    classes: tuple[SignatureClassEntry, ...]
     stats: dict[str, Any] = field(default_factory=dict)

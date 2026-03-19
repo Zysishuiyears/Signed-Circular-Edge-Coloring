@@ -4,7 +4,10 @@ from datetime import datetime
 from pathlib import Path
 
 from signedcoloring.io import (
+    classification_classes_payload,
+    classification_summary_payload,
     decision_summary_payload,
+    dump_classification_request,
     dump_instance,
     dump_request,
     dump_witness,
@@ -12,6 +15,8 @@ from signedcoloring.io import (
     write_json,
 )
 from signedcoloring.models import (
+    ClassificationRequest,
+    ClassificationResult,
     DecisionResult,
     OptimizationResult,
     SignedGraphInstance,
@@ -53,4 +58,17 @@ def write_optimization_artifacts(
     write_json(run_dir / "solver_stats.json", result.stats)
     if result.witness is not None:
         write_json(run_dir / "witness.json", dump_witness(result.witness))
+    return run_dir
+
+
+def write_classification_artifacts(
+    request: ClassificationRequest,
+    instance: SignedGraphInstance,
+    result: ClassificationResult,
+) -> Path:
+    run_dir = create_run_directory(request.output_dir, instance.name, "classify-signatures")
+    write_json(run_dir / "request.json", dump_classification_request(request))
+    write_json(run_dir / "instance.snapshot.json", dump_instance(instance))
+    write_json(run_dir / "summary.json", classification_summary_payload(result))
+    write_json(run_dir / "classes.json", classification_classes_payload(result))
     return run_dir
