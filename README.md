@@ -1,46 +1,60 @@
 # Signed Circular Edge Coloring
 
-Exact computation tools for circular edge coloring on signed graphs.
+**符号图圆环边染色计算 / Exact computation for signed-graph circular edge coloring**
 
-This repository studies concrete signed-graph instances `(G, sigma)` and currently supports:
+本仓库面向符号图的圆环边染色精确计算，研究在给定具体实例 `(G, σ)` 时，如何判定固定圆环周长 `r` 是否可行，并进一步求出最小可行圆环参数。当前仓库同时支持两条工作流：一条是对具体 signed graph 做 `decide / optimize / verify`，另一条是对固定底图做 `classify-signatures`，先按 switching 或 switching 加图自同构做代表元分类，再把代表元送入现有精确求解流程。
 
-- `decide`: exact feasibility checking for a fixed circle circumference `r`
-- `optimize`: exact optimization of the minimum feasible circumference
-- `verify`: independent witness validation
-- `classify-signatures`: exact classification of all signatures on a fixed base graph up to
-  switching, and optionally up to switching plus graph automorphism
+This repository studies exact circular edge coloring on signed graphs. It supports exact feasibility checking and optimization for concrete signed instances `(G, σ)`, and it also supports exact signature classification on a fixed base graph up to switching, or up to switching plus graph automorphism.
 
-The intended workflow is:
+## Quick Start / 快速开始
 
-`data/instances -> classify-signatures -> representatives -> decide/optimize -> artifacts/runs -> curated results`
+Recommended order: install dependencies -> run one solver example -> run one classification example -> inspect files under `artifacts/runs/`.
 
-## Quick Start
+推荐顺序：安装依赖 -> 跑一个求解示例 -> 跑一个分类示例 -> 查看 `artifacts/runs/` 下的结果文件。
 
-Install dependencies:
+### 1. Install dependencies / 安装依赖
 
 ```powershell
 python -m pip install -e .[dev]
 ```
 
-Run a fixed-`r` feasibility check:
+### 2. Check a fixed `r` with `decide` / 用 `decide` 判定固定 `r`
+
+Use `decide` when you already have a candidate circumference and want an exact yes/no answer, together with a witness when feasible.
+
+当你已经有候选圆环周长 `r`，只需要精确判断它是否可行时，使用 `decide`。
 
 ```powershell
 python -m signedcoloring decide --instance data/instances/star_k1_3_positive.json --r 3
 ```
 
-Optimize the minimum feasible circumference:
+### 3. Compute the minimum feasible `r` with `optimize` / 用 `optimize` 求最小可行 `r`
+
+Use `optimize` when you want the exact circular parameter of one concrete signed graph instance.
+
+当你希望直接求出某个具体符号图实例的最小圆环参数时，使用 `optimize`。
 
 ```powershell
 python -m signedcoloring optimize --instance data/instances/star_k1_3_positive.json
 ```
 
-Verify a saved witness:
+### 4. Independently validate a saved witness with `verify` / 用 `verify` 独立校验证据
+
+Use `verify` to independently check whether a saved witness really satisfies the incidence-color constraints.
+
+当你希望独立校验某次求解输出的颜色证据是否满足定义中的约束时，使用 `verify`。
 
 ```powershell
 python -m signedcoloring verify --run-dir artifacts/runs/<timestamp>_star_k1_3_positive_optimize
 ```
 
-Classify all signatures on a fixed base graph up to switching:
+### 5. Classify signatures on a fixed base graph with `classify-signatures` / 用 `classify-signatures` 对固定底图分类
+
+Use `classify-signatures` when your input is a base graph carrier and you want stable signature representatives for later experiments.
+
+当你想先固定一个底图，再对其所有符号映射类型做稳定分类、选取代表元用于后续实验时，使用 `classify-signatures`。
+
+Classify up to switching only:
 
 ```powershell
 python -m signedcoloring classify-signatures --instance data/instances/cycle_c4_one_negative.json
@@ -58,28 +72,54 @@ Keep only classes that contain a representative with exactly `k` negative edges:
 python -m signedcoloring classify-signatures --instance data/instances/cycle_c4_one_negative.json --k 1
 ```
 
-## What `classify-signatures` Does
+`--mode switching-only` keeps only switching equivalence. `--mode switching+automorphism` takes a further quotient by automorphisms of the base graph. `--k` keeps only those classes whose switching orbit contains at least one representative with exactly `k` negative edges.
 
-The classification command treats the input JSON as a carrier of the underlying base graph.
-Its current edge signs are ignored. The command then:
+`--mode switching-only` 只按 switching 等价分类；`--mode switching+automorphism` 会进一步按底图自同构取商；`--k` 表示只保留那些 switching 轨道中至少存在一个恰有 `k` 条负边代表的类。
 
-1. fixes a deterministic vertex order and edge order
-2. builds a deterministic spanning forest
-3. canonicalizes each switching class by making every forest edge positive
-4. uses the non-tree edges as cycle-space bits to enumerate switching classes exactly
-5. optionally takes a further quotient by graph automorphisms of the base graph
+## Example Workflow / 示例工作流
 
-This classification layer is meant as infrastructure for later experiments of the form:
+### Solver-first workflow / 直接求解工作流
 
-1. fix a base graph
-2. classify all signature types
-3. choose class representatives
-4. run the existing exact solver on those representatives
-5. aggregate which signature types realize extremal circular parameters
+For a concrete signed graph instance, a typical workflow is:
 
-## Input Format
+对一个具体的符号图实例，一个典型流程是：
 
-Instances are stored as JSON and currently use the same schema for both solving and classification:
+1. Run a fixed-`r` feasibility check:
+
+```powershell
+python -m signedcoloring decide --instance data/instances/cycle_c4_one_negative.json --r 8/3
+```
+
+2. Run exact optimization:
+
+```powershell
+python -m signedcoloring optimize --instance data/instances/cycle_c4_one_negative.json
+```
+
+3. Inspect the new timestamped directory under `artifacts/runs/`, especially `summary.json`, `witness.json`, and `solver_stats.json`.
+
+### Classification-first workflow / 先分类后求解工作流
+
+When the real object of study is a fixed base graph, the intended workflow is:
+
+当真正的研究对象是一个固定底图时，推荐工作流是：
+
+1. Prepare one carrier instance JSON for the base graph.
+2. Run `classify-signatures` to enumerate stable representatives.
+3. Inspect `summary.json` and `classes.json`.
+4. Choose one or more representatives.
+5. Convert those representatives back into concrete signed instances.
+6. Run `decide` or `optimize` on those representatives.
+
+The classification command uses the same JSON schema as the solver, but it treats the file as a carrier of the underlying base graph and ignores the stored edge signs.
+
+`classify-signatures` 与求解命令共用同一个 JSON schema，但它把输入文件视为底图载体，只使用图结构，忽略文件中当前写入的边符号。
+
+## Input Format / 输入格式
+
+Current versions of the repository use one JSON schema for both solving and classification:
+
+当前版本对求解和分类共用同一个 JSON 输入格式：
 
 ```json
 {
@@ -92,11 +132,13 @@ Instances are stored as JSON and currently use the same schema for both solving 
 ```
 
 - `sign` accepts `"+"`, `"-"`, `"positive"`, `"negative"`, `"plus"`, `"minus"`.
-- For solving commands, rational parameters such as `r` are best supplied as strings such as
-  `"7/2"` or `"3.5"` to preserve exactness.
-- For `classify-signatures`, the graph structure is used and the stored signs are ignored.
+- Solver commands read a concrete signed instance `(G, σ)`.
+- Classification commands use the same file as a base-graph carrier and ignore the stored signs.
+- To preserve exactness, rational parameters such as `r` are best supplied as strings such as `"7/2"` or `"3.5"`.
 
-## Output Files
+## Output Files / 输出文件
+
+### Solver runs / 求解运行产物
 
 Each `decide` or `optimize` run writes a timestamped directory under `artifacts/runs/` containing:
 
@@ -106,6 +148,10 @@ Each `decide` or `optimize` run writes a timestamped directory under `artifacts/
 - `witness.json` when feasible
 - `solver_stats.json`
 
+`summary.json` records the main result. `witness.json` stores the returned base colors and incidence colors. `solver_stats.json` stores status, bounds, and elapsed time.
+
+### Classification runs / 分类运行产物
+
 Each `classify-signatures` run writes:
 
 - `request.json`
@@ -113,11 +159,9 @@ Each `classify-signatures` run writes:
 - `summary.json`
 - `classes.json`
 
-`summary.json` records graph size, component count, cycle rank, class counts, bit convention, and
-the deterministic edge order used for encoding representatives. `classes.json` stores stable class
-representatives and machine-readable metadata that can later be converted back into signed instances.
+`summary.json` records graph size, component count, cycle rank, class counts, bit convention, and the deterministic edge order. `classes.json` stores stable class representatives and machine-readable metadata that can later be converted back into concrete signed instances.
 
-## Repository Layout
+## Repository Layout / 项目结构
 
 ```text
 docs/               Mathematical model and workflow notes
@@ -130,7 +174,32 @@ results/            Curated tables, figures, and notes
 scripts/            Thin wrappers only
 ```
 
-## Documentation
+### Source and core logic / 源码与核心逻辑
+
+- `src/signedcoloring/` contains the instance model, JSON IO, exact solver, witness verification, signature classification, and CLI entrypoints.
+- `tests/` contains unit and integration tests for parsing, solving, classification, and command-line behavior.
+
+### Inputs and experiment requests / 输入与实验请求
+
+- `data/instances/` stores concrete signed-graph instances and base-graph carriers.
+- `configs/` stores parameter-driven request examples.
+
+### Raw artifacts / 原始运行产物
+
+- `artifacts/runs/` stores timestamped raw outputs from parameter-driven runs and is ignored by Git.
+
+### Curated outputs / 整理后的结果
+
+- `results/` stores curated tables, figures, and notes that are meant to be kept and shared.
+- `scripts/` contains thin wrappers only and should not hold core mathematical logic.
+
+## Documentation / 相关文档
 
 - [docs/model.md](docs/model.md): solver model and signature-classification model
-- [docs/workflow.md](docs/workflow.md): recommended experiment workflow
+- [docs/workflow.md](docs/workflow.md): recommended experiment workflow and output organization
+
+## README Maintenance / README 维护原则
+
+Future updates on this branch should keep the README focused on the same core questions: what the project does, how to install it, how to run it, where to find outputs, and how the repository is organized. Sections for files or policies that do not exist in the repository yet should stay out of scope until those materials are actually added.
+
+后续本分支若继续增加功能，README 仍应优先补充这几类信息：项目做什么、如何安装、如何运行、结果看哪里、仓库如何组织。仓库中尚不存在的文件或制度性内容，不应提前扩写成独立章节。
