@@ -6,6 +6,8 @@
 
 This repository studies exact circular edge coloring on signed graphs. It supports exact feasibility checking and optimization for concrete signed instances `(G, σ)`, and it also supports exact signature classification on a fixed base graph up to switching, or up to switching plus graph automorphism.
 
+The current classification workflow uses one generic exact backend. It is intended for small and medium base graphs; large dense families such as `K_{6,6}` are not currently treated by a specialized backend in this branch.
+
 ## Quick Start / 快速开始
 
 Recommended order: install dependencies -> run one solver example -> run one classification example -> inspect files under `artifacts/runs/`.
@@ -72,9 +74,19 @@ Keep only classes that contain a representative with exactly `k` negative edges:
 python -m signedcoloring classify-signatures --instance data/instances/cycle_c4_one_negative.json --k 1
 ```
 
+Classify and immediately optimize every emitted representative:
+
+```powershell
+python -m signedcoloring classify-signatures --instance data/instances/cycle_c4_one_negative.json --mode switching+automorphism --optimize-representatives
+```
+
 `--mode switching-only` keeps only switching equivalence. `--mode switching+automorphism` takes a further quotient by automorphisms of the base graph. `--k` keeps only those classes whose switching orbit contains at least one representative with exactly `k` negative edges.
 
 `--mode switching-only` 只按 switching 等价分类；`--mode switching+automorphism` 会进一步按底图自同构取商；`--k` 表示只保留那些 switching 轨道中至少存在一个恰有 `k` 条负边代表的类。
+
+When `--optimize-representatives` is enabled, the command classifies the base graph, runs exact `optimize` on every emitted class representative, and aggregates the class-wise minimum `r` values. The aggregated output records both the smallest and the largest values among those class-wise minima.
+
+This branch deliberately keeps `classify-signatures` as a single generic entrypoint. It does not add graph-family-specific modes or a complete-bipartite specialized backend.
 
 ## Example Workflow / 示例工作流
 
@@ -160,6 +172,8 @@ Each `classify-signatures` run writes:
 - `classes.json`
 
 `summary.json` records graph size, component count, cycle rank, class counts, bit convention, and the deterministic edge order. `classes.json` stores stable class representatives and machine-readable metadata that can later be converted back into concrete signed instances.
+
+If `--optimize-representatives` is enabled, the same run directory also contains `optimize_runs/`, where each emitted class gets its own nested optimize artifact directory. In that mode, `summary.json` records the global minimum and global maximum among the class-wise `best_r` values, and `classes.json` includes each class representative's `best_r` and witness.
 
 ## Repository Layout / 项目结构
 

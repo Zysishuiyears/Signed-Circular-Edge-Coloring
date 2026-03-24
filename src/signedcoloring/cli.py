@@ -11,7 +11,10 @@ from signedcoloring.artifacts import (
     write_decision_artifacts,
     write_optimization_artifacts,
 )
-from signedcoloring.classification import classify_signatures
+from signedcoloring.classification import (
+    classify_and_optimize_representatives,
+    classify_signatures,
+)
 from signedcoloring.io import (
     load_classification_request,
     load_instance,
@@ -76,6 +79,8 @@ def _build_classification_request_from_args(args: argparse.Namespace) -> Classif
             "k": request.k,
             "limit": request.limit,
             "emit_representatives": request.emit_representatives,
+            "optimize_representatives": request.optimize_representatives,
+            "optimize_timeout_ms": request.optimize_timeout_ms,
             "output_dir": str(request.output_dir),
         }
 
@@ -89,6 +94,10 @@ def _build_classification_request_from_args(args: argparse.Namespace) -> Classif
         payload["limit"] = args.limit
     if args.emit_representatives:
         payload["emit_representatives"] = True
+    if args.optimize_representatives:
+        payload["optimize_representatives"] = True
+    if args.optimize_timeout_ms is not None:
+        payload["optimize_timeout_ms"] = args.optimize_timeout_ms
     if args.output_dir is not None:
         payload["output_dir"] = str(Path(args.output_dir).resolve())
 
@@ -101,6 +110,8 @@ def _build_classification_request_from_args(args: argparse.Namespace) -> Classif
         k=payload.get("k"),
         limit=payload.get("limit"),
         emit_representatives=payload.get("emit_representatives", False),
+        optimize_representatives=payload.get("optimize_representatives", False),
+        optimize_timeout_ms=payload.get("optimize_timeout_ms"),
         output_dir=Path(payload.get("output_dir", "artifacts/runs")),
     )
 
@@ -185,6 +196,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print representative codes to stdout after the run.",
     )
     classify_parser.add_argument(
+        "--optimize-representatives",
+        action="store_true",
+        help=(
+            "Run exact optimize on each emitted representative and aggregate the "
+            "class-level best_r values."
+        ),
+    )
+    classify_parser.add_argument(
+        "--optimize-timeout-ms",
+        type=int,
+        help="Optional timeout in milliseconds for each representative optimize run.",
+    )
+    classify_parser.add_argument(
         "--output-dir",
         type=Path,
         help="Root directory for run artifacts.",
@@ -241,12 +265,21 @@ def _run_verify(args: argparse.Namespace) -> int:
 def _run_classify_signatures(args: argparse.Namespace) -> int:
     request = _build_classification_request_from_args(args)
     instance = load_instance(request.instance_path)
-    result = classify_signatures(
-        instance,
-        mode=request.classification_mode,
-        k=request.k,
-        limit=request.limit,
-    )
+    if request.optimize_representatives:
+        result = classify_and_optimize_representatives(
+            instance,
+            mode=request.classification_mode,
+            k=request.k,
+            limit=request.limit,
+            timeout_ms=request.optimize_timeout_ms,
+        )
+    else:
+        result = classify_signatures(
+            instance,
+            mode=request.classification_mode,
+            k=request.k,
+            limit=request.limit,
+        )
     run_dir = write_classification_artifacts(request, instance, result)
 
     print(f"mode: {result.classification_mode}")
@@ -254,11 +287,18 @@ def _run_classify_signatures(args: argparse.Namespace) -> int:
     if result.combined_class_count is not None:
         print(f"combined_class_count: {result.combined_class_count}")
     print(f"emitted_class_count: {len(result.classes)}")
+    if result.optimize_representatives:
+        print(f"optimized_class_count: {result.optimized_class_count}")
+        print(f"global_min_best_r: {result.global_min_best_r}")
+        print(f"global_max_best_r: {result.global_max_best_r}")
     print(f"run_dir: {run_dir}")
 
     if request.emit_representatives:
         for entry in result.classes:
-            print(f"{entry.class_id}: {entry.representative_code}")
+            if entry.best_r is not None:
+                print(f"{entry.class_id}: {entry.representative_code} -> {entry.best_r}")
+            else:
+                print(f"{entry.class_id}: {entry.representative_code}")
 
     return 0
 

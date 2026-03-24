@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from fractions import Fraction
 from time import perf_counter
 
 import networkx as nx
@@ -13,6 +14,7 @@ from signedcoloring.models import (
     SignedEdge,
     SignedGraphInstance,
 )
+from signedcoloring.solver import solve_optimization
 
 POSITIVE_BIT = 0
 NEGATIVE_BIT = 1
@@ -261,6 +263,7 @@ def enumerate_switching_classes(
     instance: SignedGraphInstance,
     *,
     k: int | None = None,
+    include_reachable_negative_edge_counts: bool = False,
     structure: _GraphStructure | None = None,
 ) -> tuple[_SwitchingClassRecord, ...]:
     structure = structure or build_graph_structure(instance)
@@ -270,11 +273,12 @@ def enumerate_switching_classes(
         cycle_bits = _int_to_bits(value, structure.cycle_rank)
         representative_bits = reconstruct_from_cycle_bits(cycle_bits, structure)
         reachable_negative_edge_counts = None
-        if k is not None:
+        if k is not None or include_reachable_negative_edge_counts:
             reachable_negative_edge_counts = _reachable_negative_edge_counts(
                 representative_bits,
                 structure,
             )
+        if k is not None:
             if k not in reachable_negative_edge_counts:
                 continue
 
@@ -350,10 +354,16 @@ def classify_signatures(
     mode: ClassificationMode = "switching-only",
     k: int | None = None,
     limit: int | None = None,
+    include_reachable_negative_edge_counts: bool = False,
 ) -> ClassificationResult:
     started_at = perf_counter()
     structure = build_graph_structure(instance)
-    switching_records = enumerate_switching_classes(instance, k=k, structure=structure)
+    switching_records = enumerate_switching_classes(
+        instance,
+        k=k,
+        include_reachable_negative_edge_counts=include_reachable_negative_edge_counts,
+        structure=structure,
+    )
     theoretical_switching_class_count = 1 << structure.cycle_rank
 
     automorphisms: tuple[tuple[int, ...], ...] = ((tuple(range(len(structure.vertex_order)))),)
@@ -434,9 +444,143 @@ def classify_signatures(
             "elapsed_seconds": round(elapsed_seconds, 6),
             "emitted_class_count": len(emitted_entries),
             "full_class_count": full_class_count,
+            "include_reachable_negative_edge_counts": include_reachable_negative_edge_counts,
             "k_filter_applied": k is not None,
             "limit": limit,
             "num_automorphisms": len(automorphisms) if mode == "switching+automorphism" else None,
             "truncated": limit is not None and len(emitted_entries) < full_class_count,
         },
+    )
+
+
+def build_signed_instance(
+    base_instance: SignedGraphInstance,
+    representative_signs_by_edge_id: dict[str, str],
+    *,
+    name: str | None = None,
+) -> SignedGraphInstance:
+    edges = tuple(
+        SignedEdge(
+            id=edge.id,
+            u=edge.u,
+            v=edge.v,
+            sign=representative_signs_by_edge_id[edge.id],
+        )
+        for edge in base_instance.edges
+    )
+    return SignedGraphInstance(
+        name=name or base_instance.name,
+        vertices=base_instance.vertices,
+        edges=edges,
+    )
+
+
+def classify_and_optimize_representatives(
+    instance: SignedGraphInstance,
+    *,
+    mode: ClassificationMode = "switching-only",
+    k: int | None = None,
+    limit: int | None = None,
+    timeout_ms: int | None = None,
+) -> ClassificationResult:
+    classification_result = classify_signatures(
+        instance,
+        mode=mode,
+        k=k,
+        limit=limit,
+        include_reachable_negative_edge_counts=(k is None),
+    )
+    edge_by_id = instance.edge_by_id
+    delta = instance.max_degree()
+    optimized_entries: list[SignatureClassEntry] = []
+
+    for entry in classification_result.classes:
+        negative_edge_ids = tuple(
+            edge_id
+            for edge_id in classification_result.edge_order
+            if entry.representative_signs_by_edge_id[edge_id] == "-"
+        )
+        negative_edges = tuple(
+            (edge_id, edge_by_id[edge_id].u, edge_by_id[edge_id].v) for edge_id in negative_edge_ids
+        )
+
+        representative_instance = build_signed_instance(
+            instance,
+            entry.representative_signs_by_edge_id,
+            name=f"{instance.name}_{entry.class_id}",
+        )
+        optimization_result = solve_optimization(representative_instance, timeout_ms=timeout_ms)
+        best_r = optimization_result.best_r
+        best_r_minus_delta = best_r - delta if best_r is not None else None
+        best_r_over_delta = (
+            best_r / Fraction(delta, 1) if best_r is not None and delta > 0 else None
+        )
+
+        optimized_entries.append(
+            replace(
+                entry,
+                negative_edge_ids=negative_edge_ids,
+                negative_edges=negative_edges,
+                best_r=best_r,
+                best_r_minus_delta=best_r_minus_delta,
+                best_r_over_delta=best_r_over_delta,
+                optimize_status=optimization_result.status,
+                witness=optimization_result.witness,
+                optimization_result=optimization_result,
+            )
+        )
+
+    best_r_values = tuple(entry.best_r for entry in optimized_entries if entry.best_r is not None)
+    global_min_best_r = min(best_r_values) if best_r_values else None
+    global_max_best_r = max(best_r_values) if best_r_values else None
+
+    finalized_entries: list[SignatureClassEntry] = []
+    for entry in optimized_entries:
+        finalized_entries.append(
+            replace(
+                entry,
+                attains_global_min_best_r=(
+                    entry.best_r == global_min_best_r if global_min_best_r is not None else None
+                ),
+                attains_global_max_best_r=(
+                    entry.best_r == global_max_best_r if global_max_best_r is not None else None
+                ),
+            )
+        )
+
+    global_min_class_ids = tuple(
+        entry.class_id for entry in finalized_entries if entry.attains_global_min_best_r
+    )
+    global_max_class_ids = tuple(
+        entry.class_id for entry in finalized_entries if entry.attains_global_max_best_r
+    )
+    global_min_representative_codes = tuple(
+        entry.representative_code for entry in finalized_entries if entry.attains_global_min_best_r
+    )
+    global_max_representative_codes = tuple(
+        entry.representative_code for entry in finalized_entries if entry.attains_global_max_best_r
+    )
+
+    stats = dict(classification_result.stats)
+    stats.update(
+        {
+            "optimize_representatives": True,
+            "optimize_timeout_ms": timeout_ms,
+            "optimized_class_count": len(finalized_entries),
+        }
+    )
+
+    return replace(
+        classification_result,
+        classes=tuple(finalized_entries),
+        optimize_representatives=True,
+        optimized_class_count=len(finalized_entries),
+        delta=delta,
+        global_min_best_r=global_min_best_r,
+        global_max_best_r=global_max_best_r,
+        global_min_class_ids=global_min_class_ids,
+        global_max_class_ids=global_max_class_ids,
+        global_min_representative_codes=global_min_representative_codes,
+        global_max_representative_codes=global_max_representative_codes,
+        stats=stats,
     )

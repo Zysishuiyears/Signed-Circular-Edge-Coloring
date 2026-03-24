@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from fractions import Fraction
 from itertools import product
 
 from signedcoloring.classification import (
     build_graph_structure,
     canonical_switching_rep,
+    classify_and_optimize_representatives,
     classify_signatures,
     compute_automorphisms,
     reconstruct_from_cycle_bits,
@@ -207,3 +209,39 @@ def test_cube_q3_classification_is_deterministic() -> None:
         entry.cycle_bit_code for entry in second.classes
     ]
     assert compute_automorphisms(instance) == compute_automorphisms(instance)
+
+
+def test_classify_and_optimize_representatives_tracks_global_min_and_max() -> None:
+    result = classify_and_optimize_representatives(
+        _cycle_c4_instance(),
+        mode="switching+automorphism",
+    )
+
+    assert result.optimize_representatives is True
+    assert result.optimized_class_count == 2
+    assert result.global_min_best_r == Fraction(2, 1)
+    assert result.global_max_best_r == Fraction(8, 3)
+    assert result.global_min_class_ids == ("class-0001",)
+    assert result.global_max_class_ids == ("class-0002",)
+
+    classes_by_id = {entry.class_id: entry for entry in result.classes}
+    assert classes_by_id["class-0001"].best_r == Fraction(2, 1)
+    assert classes_by_id["class-0001"].attains_global_min_best_r is True
+    assert classes_by_id["class-0001"].attains_global_max_best_r is False
+    assert classes_by_id["class-0002"].best_r == Fraction(8, 3)
+    assert classes_by_id["class-0002"].attains_global_min_best_r is False
+    assert classes_by_id["class-0002"].attains_global_max_best_r is True
+    assert classes_by_id["class-0002"].witness is not None
+
+
+def test_single_class_can_attain_both_global_min_and_max_best_r() -> None:
+    result = classify_and_optimize_representatives(
+        _path_instance(),
+        mode="switching+automorphism",
+    )
+
+    assert len(result.classes) == 1
+    entry = result.classes[0]
+    assert result.global_min_best_r == result.global_max_best_r == entry.best_r
+    assert entry.attains_global_min_best_r is True
+    assert entry.attains_global_max_best_r is True

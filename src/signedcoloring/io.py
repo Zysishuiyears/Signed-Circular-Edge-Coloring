@@ -127,6 +127,8 @@ def classification_request_from_payload(
         k=payload.get("k"),
         limit=payload.get("limit"),
         emit_representatives=payload.get("emit_representatives", False),
+        optimize_representatives=payload.get("optimize_representatives", False),
+        optimize_timeout_ms=payload.get("optimize_timeout_ms"),
         output_dir=(
             _resolve_path(payload["output_dir"], base_dir)
             if payload.get("output_dir") is not None
@@ -161,12 +163,15 @@ def dump_classification_request(request: ClassificationRequest) -> dict[str, Any
         "instance_path": str(request.instance_path),
         "classification_mode": request.classification_mode,
         "emit_representatives": request.emit_representatives,
+        "optimize_representatives": request.optimize_representatives,
         "output_dir": str(request.output_dir),
     }
     if request.k is not None:
         payload["k"] = request.k
     if request.limit is not None:
         payload["limit"] = request.limit
+    if request.optimize_timeout_ms is not None:
+        payload["optimize_timeout_ms"] = request.optimize_timeout_ms
     return payload
 
 
@@ -253,16 +258,37 @@ def classification_summary_payload(result: ClassificationResult) -> dict[str, An
         "cycle_bit_encoding": "bitstring over non-tree edges after forest canonicalization",
         "edge_order": list(result.edge_order),
         "k_filter_applied": result.k is not None,
+        "optimize_representatives": result.optimize_representatives,
         "stats": to_jsonable(result.stats),
     }
     if result.combined_class_count is not None:
         payload["combined_class_count"] = result.combined_class_count
     if result.k is not None:
         payload["k"] = result.k
+    if result.optimized_class_count is not None:
+        payload["optimized_class_count"] = result.optimized_class_count
+    if result.delta is not None:
+        payload["delta"] = result.delta
+    if result.global_min_best_r is not None:
+        payload["global_min_best_r"] = fraction_to_string(result.global_min_best_r)
+    if result.global_max_best_r is not None:
+        payload["global_max_best_r"] = fraction_to_string(result.global_max_best_r)
+    if result.global_min_class_ids:
+        payload["global_min_class_ids"] = list(result.global_min_class_ids)
+    if result.global_max_class_ids:
+        payload["global_max_class_ids"] = list(result.global_max_class_ids)
+    if result.global_min_representative_codes:
+        payload["global_min_representative_codes"] = list(result.global_min_representative_codes)
+    if result.global_max_representative_codes:
+        payload["global_max_representative_codes"] = list(result.global_max_representative_codes)
     return payload
 
 
-def _class_entry_payload(entry: SignatureClassEntry) -> dict[str, Any]:
+def _class_entry_payload(
+    entry: SignatureClassEntry,
+    *,
+    optimize_run_dirs: dict[str, Path] | None = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "class_id": entry.class_id,
         "representative_code": entry.representative_code,
@@ -276,16 +302,45 @@ def _class_entry_payload(entry: SignatureClassEntry) -> dict[str, Any]:
         payload["automorphism_orbit_size"] = entry.automorphism_orbit_size
     if entry.reachable_negative_edge_counts is not None:
         payload["reachable_negative_edge_counts"] = list(entry.reachable_negative_edge_counts)
+    if entry.negative_edge_ids is not None:
+        payload["negative_edge_ids"] = list(entry.negative_edge_ids)
+    if entry.negative_edges is not None:
+        payload["negative_edges"] = [
+            {"edge_id": edge_id, "u": u, "v": v} for edge_id, u, v in entry.negative_edges
+        ]
+    if entry.best_r is not None:
+        payload["best_r"] = fraction_to_string(entry.best_r)
+    if entry.best_r_minus_delta is not None:
+        payload["best_r_minus_delta"] = fraction_to_string(entry.best_r_minus_delta)
+    if entry.best_r_over_delta is not None:
+        payload["best_r_over_delta"] = fraction_to_string(entry.best_r_over_delta)
+    if entry.optimize_status is not None:
+        payload["optimize_status"] = entry.optimize_status
+    if entry.witness is not None:
+        payload["witness"] = dump_witness(entry.witness)
+    if entry.attains_global_min_best_r is not None:
+        payload["attains_global_min_best_r"] = entry.attains_global_min_best_r
+    if entry.attains_global_max_best_r is not None:
+        payload["attains_global_max_best_r"] = entry.attains_global_max_best_r
+    if optimize_run_dirs is not None and entry.class_id in optimize_run_dirs:
+        payload["optimize_run_dir"] = str(optimize_run_dirs[entry.class_id])
     return payload
 
 
-def classification_classes_payload(result: ClassificationResult) -> dict[str, Any]:
+def classification_classes_payload(
+    result: ClassificationResult,
+    *,
+    optimize_run_dirs: dict[str, Path] | None = None,
+) -> dict[str, Any]:
     return {
         "graph_name": result.graph_name,
         "classification_mode": result.classification_mode,
         "bit_convention": result.bit_convention,
         "edge_order": list(result.edge_order),
-        "classes": [_class_entry_payload(entry) for entry in result.classes],
+        "classes": [
+            _class_entry_payload(entry, optimize_run_dirs=optimize_run_dirs)
+            for entry in result.classes
+        ],
     }
 
 

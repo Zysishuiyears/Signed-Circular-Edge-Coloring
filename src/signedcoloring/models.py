@@ -149,6 +149,8 @@ class ClassificationRequest:
     k: int | None = None
     limit: int | None = None
     emit_representatives: bool = False
+    optimize_representatives: bool = False
+    optimize_timeout_ms: int | None = None
     output_dir: Path = Path("artifacts/runs")
 
     def __post_init__(self) -> None:
@@ -158,6 +160,8 @@ class ClassificationRequest:
             raise ValueError("k must be non-negative when provided.")
         if self.limit is not None and self.limit <= 0:
             raise ValueError("limit must be positive when provided.")
+        if self.optimize_timeout_ms is not None and self.optimize_timeout_ms <= 0:
+            raise ValueError("optimize_timeout_ms must be positive when provided.")
 
 
 @dataclass(frozen=True)
@@ -170,6 +174,16 @@ class SignatureClassEntry:
     switching_orbit_size: int | None = None
     automorphism_orbit_size: int | None = None
     reachable_negative_edge_counts: tuple[int, ...] | None = None
+    negative_edge_ids: tuple[str, ...] | None = None
+    negative_edges: tuple[tuple[str, str, str], ...] | None = None
+    best_r: Fraction | None = None
+    best_r_minus_delta: Fraction | None = None
+    best_r_over_delta: Fraction | None = None
+    optimize_status: str | None = None
+    witness: Witness | None = None
+    optimization_result: OptimizationResult | None = None
+    attains_global_min_best_r: bool | None = None
+    attains_global_max_best_r: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -187,4 +201,13 @@ class ClassificationResult:
     bit_convention: str
     edge_order: tuple[str, ...]
     classes: tuple[SignatureClassEntry, ...]
+    optimize_representatives: bool = False
+    optimized_class_count: int | None = None
+    delta: int | None = None
+    global_min_best_r: Fraction | None = None
+    global_max_best_r: Fraction | None = None
+    global_min_class_ids: tuple[str, ...] = ()
+    global_max_class_ids: tuple[str, ...] = ()
+    global_min_representative_codes: tuple[str, ...] = ()
+    global_max_representative_codes: tuple[str, ...] = ()
     stats: dict[str, Any] = field(default_factory=dict)
