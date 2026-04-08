@@ -42,3 +42,27 @@ def test_star_k13_optimizes_to_three() -> None:
     assert result.best_r == Fraction(3, 1)
     assert result.witness is not None
     assert verify_witness(instance, result.witness).valid
+
+
+def test_optimize_short_circuits_when_lower_bound_is_feasible() -> None:
+    instance = load_instance(_instance_path("star_k1_3_positive.json"))
+
+    result = solve_optimization(instance)
+
+    assert result.best_r == Fraction(3, 1)
+    assert result.witness is not None
+    assert verify_witness(instance, result.witness).valid
+    assert result.stats["optimization_strategy"] == "lower-bound-short-circuit"
+    assert result.stats["lower_bound_decision_status"] == "sat"
+
+
+def test_optimize_falls_back_to_full_optimization_above_lower_bound() -> None:
+    instance = load_instance(_instance_path("cycle_c4_one_negative.json"))
+
+    result = solve_optimization(instance)
+
+    assert result.best_r == Fraction(8, 3)
+    assert result.witness is not None
+    assert verify_witness(instance, result.witness).valid
+    assert result.stats["optimization_strategy"] == "full-optimize"
+    assert result.stats["lower_bound_decision_status"] == "unsat"

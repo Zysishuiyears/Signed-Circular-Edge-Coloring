@@ -124,6 +124,8 @@ def classification_request_from_payload(
     return ClassificationRequest(
         instance_path=_resolve_path(payload["instance_path"], base_dir),
         classification_mode=payload.get("classification_mode", "switching-only"),
+        classification_backend=payload.get("classification_backend", "generic"),
+        jobs=payload.get("jobs", 1),
         k=payload.get("k"),
         limit=payload.get("limit"),
         emit_representatives=payload.get("emit_representatives", False),
@@ -162,6 +164,8 @@ def dump_classification_request(request: ClassificationRequest) -> dict[str, Any
         "mode": "classify-signatures",
         "instance_path": str(request.instance_path),
         "classification_mode": request.classification_mode,
+        "classification_backend": request.classification_backend,
+        "jobs": request.jobs,
         "emit_representatives": request.emit_representatives,
         "optimize_representatives": request.optimize_representatives,
         "output_dir": str(request.output_dir),
@@ -247,6 +251,7 @@ def classification_summary_payload(result: ClassificationResult) -> dict[str, An
     payload: dict[str, Any] = {
         "graph_name": result.graph_name,
         "classification_mode": result.classification_mode,
+        "classification_backend": result.classification_backend,
         "num_vertices": result.num_vertices,
         "num_edges": result.num_edges,
         "num_components": result.num_components,

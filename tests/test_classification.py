@@ -3,6 +3,8 @@ from __future__ import annotations
 from fractions import Fraction
 from itertools import product
 
+import pytest
+
 from signedcoloring.classification import (
     build_graph_structure,
     canonical_switching_rep,
@@ -13,6 +15,7 @@ from signedcoloring.classification import (
     switch_signature,
     switching_class_cycle_bits,
 )
+from signedcoloring.classification_native import native_module_available
 from signedcoloring.models import SignedEdge, SignedGraphInstance
 
 
@@ -78,6 +81,40 @@ def _cube_q3_instance() -> SignedGraphInstance:
                 edges.append((f"e{edge_number}", vertex, neighbor, "+"))
                 edge_number += 1
     return _make_instance("cube_q3", vertices, tuple(edges))
+
+
+def _petersen_instance() -> SignedGraphInstance:
+    vertices = tuple(str(index) for index in range(10))
+    edge_specs = (
+        ("e1", "0", "1", "+"),
+        ("e2", "1", "2", "+"),
+        ("e3", "2", "3", "+"),
+        ("e4", "3", "4", "+"),
+        ("e5", "0", "4", "+"),
+        ("e6", "0", "5", "+"),
+        ("e7", "1", "6", "+"),
+        ("e8", "2", "7", "+"),
+        ("e9", "3", "8", "+"),
+        ("e10", "4", "9", "+"),
+        ("e11", "5", "7", "+"),
+        ("e12", "5", "8", "+"),
+        ("e13", "6", "8", "+"),
+        ("e14", "6", "9", "+"),
+        ("e15", "7", "9", "+"),
+    )
+    return _make_instance("petersen", vertices, edge_specs)
+
+
+def _complete_bipartite_instance(left_size: int, right_size: int) -> SignedGraphInstance:
+    left = tuple(f"a{i}" for i in range(1, left_size + 1))
+    right = tuple(f"b{i}" for i in range(1, right_size + 1))
+    edges: list[tuple[str, str, str, str]] = []
+    edge_number = 1
+    for left_vertex in left:
+        for right_vertex in right:
+            edges.append((f"e{edge_number}", left_vertex, right_vertex, "+"))
+            edge_number += 1
+    return _make_instance(f"k_{left_size}_{right_size}", left + right, tuple(edges))
 
 
 def _int_to_bits(value: int, width: int) -> tuple[int, ...]:
@@ -209,6 +246,93 @@ def test_cube_q3_classification_is_deterministic() -> None:
         entry.cycle_bit_code for entry in second.classes
     ]
     assert compute_automorphisms(instance) == compute_automorphisms(instance)
+
+
+@pytest.mark.skipif(
+    not native_module_available(),
+    reason="native classification extension is unavailable",
+)
+def test_native_orbit_search_matches_generic_backend() -> None:
+    instances = (
+        _path_instance(),
+        _cycle_c4_instance(),
+        _petersen_instance(),
+        _complete_bipartite_instance(3, 3),
+        _complete_bipartite_instance(4, 4),
+    )
+
+    for instance in instances:
+        generic = classify_signatures(instance, mode="switching+automorphism")
+        native = classify_signatures(
+            instance,
+            mode="switching+automorphism",
+            classification_backend="native-orbit-search",
+        )
+
+        assert native.classification_backend in {"generic", "native-orbit-search"}
+        assert native.switching_class_count == generic.switching_class_count
+        assert native.combined_class_count == generic.combined_class_count
+        assert [entry.representative_code for entry in native.classes] == [
+            entry.representative_code for entry in generic.classes
+        ]
+        assert [entry.cycle_bit_code for entry in native.classes] == [
+            entry.cycle_bit_code for entry in generic.classes
+        ]
+        assert [entry.reachable_negative_edge_counts for entry in native.classes] == [
+            entry.reachable_negative_edge_counts for entry in generic.classes
+        ]
+
+
+@pytest.mark.skipif(
+    not native_module_available(),
+    reason="native classification extension is unavailable",
+)
+def test_native_orbit_search_preserves_global_best_r_extrema() -> None:
+    generic = classify_and_optimize_representatives(
+        _cycle_c4_instance(),
+        mode="switching+automorphism",
+    )
+    native = classify_and_optimize_representatives(
+        _cycle_c4_instance(),
+        mode="switching+automorphism",
+        classification_backend="native-orbit-search",
+        jobs=2,
+    )
+
+    assert native.global_min_best_r == generic.global_min_best_r
+    assert native.global_max_best_r == generic.global_max_best_r
+    assert native.global_min_class_ids == generic.global_min_class_ids
+    assert native.global_max_class_ids == generic.global_max_class_ids
+
+
+@pytest.mark.skipif(
+    not native_module_available(),
+    reason="native classification extension is unavailable",
+)
+def test_native_orbit_search_parallel_jobs_match_single_thread() -> None:
+    instance = _complete_bipartite_instance(4, 4)
+
+    single = classify_signatures(
+        instance,
+        mode="switching+automorphism",
+        classification_backend="native-orbit-search",
+        jobs=1,
+    )
+    parallel = classify_signatures(
+        instance,
+        mode="switching+automorphism",
+        classification_backend="native-orbit-search",
+        jobs=2,
+    )
+
+    assert single.switching_class_count == parallel.switching_class_count
+    assert single.combined_class_count == parallel.combined_class_count
+    assert [entry.representative_code for entry in single.classes] == [
+        entry.representative_code for entry in parallel.classes
+    ]
+    assert [entry.cycle_bit_code for entry in single.classes] == [
+        entry.cycle_bit_code for entry in parallel.classes
+    ]
 
 
 def test_classify_and_optimize_representatives_tracks_global_min_and_max() -> None:

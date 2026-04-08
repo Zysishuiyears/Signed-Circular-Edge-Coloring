@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from time import perf_counter
@@ -7,9 +8,12 @@ from time import perf_counter
 import networkx as nx
 from networkx.algorithms import isomorphism
 
+from signedcoloring.classification_native import run_native_canonical_scan
 from signedcoloring.models import (
+    ClassificationBackend,
     ClassificationMode,
     ClassificationResult,
+    OptimizationResult,
     SignatureClassEntry,
     SignedEdge,
     SignedGraphInstance,
@@ -259,6 +263,43 @@ def _reachable_negative_edge_counts(
     return tuple(sorted(counts))
 
 
+def _make_signature_class_entry(
+    *,
+    class_number: int,
+    representative_bits: tuple[int, ...],
+    cycle_bits: tuple[int, ...],
+    structure: _GraphStructure,
+    switching_orbit_size: int | None = None,
+    automorphism_orbit_size: int | None = None,
+    reachable_negative_edge_counts: tuple[int, ...] | None = None,
+) -> SignatureClassEntry:
+    return SignatureClassEntry(
+        class_id=f"class-{class_number:04d}",
+        representative_code=_bits_to_code(representative_bits),
+        cycle_bit_code=_bits_to_code(cycle_bits),
+        representative_bits=representative_bits,
+        representative_signs_by_edge_id=_bits_to_signs_by_edge_id(
+            representative_bits,
+            structure,
+        ),
+        switching_orbit_size=switching_orbit_size,
+        automorphism_orbit_size=automorphism_orbit_size,
+        reachable_negative_edge_counts=reachable_negative_edge_counts,
+    )
+
+
+def _solve_class_entry_optimization_task(
+    task: tuple[SignedGraphInstance, str, dict[str, str], int | None],
+) -> tuple[str, OptimizationResult]:
+    instance, class_id, representative_signs_by_edge_id, timeout_ms = task
+    representative_instance = build_signed_instance(
+        instance,
+        representative_signs_by_edge_id,
+        name=f"{instance.name}_{class_id}",
+    )
+    return class_id, solve_optimization(representative_instance, timeout_ms=timeout_ms)
+
+
 def enumerate_switching_classes(
     instance: SignedGraphInstance,
     *,
@@ -348,28 +389,101 @@ def canonical_combined_rep(
     return best_bits
 
 
+def _enumerate_native_combined_classes(
+    *,
+    structure: _GraphStructure,
+    jobs: int,
+    k: int | None,
+    include_reachable_negative_edge_counts: bool,
+) -> tuple[tuple[SignatureClassEntry, ...], int, dict[str, float | int]]:
+    native_result = run_native_canonical_scan(
+        num_vertices=len(structure.vertex_order),
+        edge_endpoints=structure.edge_endpoints,
+        non_tree_edge_indices=structure.non_tree_edge_indices,
+        jobs=jobs,
+    )
+
+    grouped_records: list[SignatureClassEntry] = []
+    switching_class_count = 0
+
+    for native_class in native_result["classes"]:
+        cycle_mask = native_class["cycle_mask"]
+        cycle_bits = _int_to_bits(cycle_mask, structure.cycle_rank)
+        representative_bits = reconstruct_from_cycle_bits(cycle_bits, structure)
+        reachable_negative_edge_counts = None
+        if k is not None or include_reachable_negative_edge_counts:
+            reachable_negative_edge_counts = _reachable_negative_edge_counts(
+                representative_bits,
+                structure,
+            )
+        if k is not None and k not in reachable_negative_edge_counts:
+            continue
+
+        orbit_size = native_class["switching_class_count"]
+        switching_class_count += orbit_size
+        grouped_records.append(
+            _make_signature_class_entry(
+                class_number=len(grouped_records) + 1,
+                representative_bits=representative_bits,
+                cycle_bits=cycle_bits,
+                structure=structure,
+                switching_orbit_size=structure.switching_orbit_size,
+                automorphism_orbit_size=orbit_size,
+                reachable_negative_edge_counts=reachable_negative_edge_counts,
+            )
+        )
+
+    stats: dict[str, float | int] = {
+        "native_algorithm": "generator-orbit-scan",
+        "native_jobs_used": native_result["jobs_used"],
+        "enumerated_switching_class_count": native_result["enumerated_switching_class_count"],
+        "generator_count": native_result["generator_count"],
+        "merge_elapsed_seconds": round(native_result["merge_elapsed_seconds"], 6),
+        "native_elapsed_seconds": round(native_result["native_elapsed_seconds"], 6),
+    }
+    return tuple(grouped_records), switching_class_count, stats
+
+
 def classify_signatures(
     instance: SignedGraphInstance,
     *,
     mode: ClassificationMode = "switching-only",
+    classification_backend: ClassificationBackend = "generic",
+    jobs: int = 1,
     k: int | None = None,
     limit: int | None = None,
     include_reachable_negative_edge_counts: bool = False,
 ) -> ClassificationResult:
     started_at = perf_counter()
     structure = build_graph_structure(instance)
-    switching_records = enumerate_switching_classes(
-        instance,
-        k=k,
-        include_reachable_negative_edge_counts=include_reachable_negative_edge_counts,
-        structure=structure,
-    )
     theoretical_switching_class_count = 1 << structure.cycle_rank
+    actual_backend = classification_backend
+    if actual_backend == "native-orbit-search":
+        if mode != "switching+automorphism" or structure.cycle_rank == 0:
+            actual_backend = "generic"
+        elif structure.cycle_rank > 63:
+            raise ValueError("native-orbit-search supports cycle rank up to 63.")
 
+    switching_records: tuple[_SwitchingClassRecord, ...] = ()
     automorphisms: tuple[tuple[int, ...], ...] = ((tuple(range(len(structure.vertex_order)))),)
     combined_class_count: int | None = None
+    backend_stats: dict[str, float | int | bool | str | None] = {}
 
-    if mode == "switching+automorphism":
+    if mode == "switching+automorphism" and actual_backend == "native-orbit-search":
+        final_entries, switching_class_count, backend_stats = _enumerate_native_combined_classes(
+            structure=structure,
+            jobs=jobs,
+            k=k,
+            include_reachable_negative_edge_counts=include_reachable_negative_edge_counts,
+        )
+        combined_class_count = len(final_entries)
+    elif mode == "switching+automorphism":
+        switching_records = enumerate_switching_classes(
+            instance,
+            k=k,
+            include_reachable_negative_edge_counts=include_reachable_negative_edge_counts,
+            structure=structure,
+        )
         automorphisms = compute_automorphisms(instance, structure=structure)
         grouped_records: dict[tuple[int, ...], list[_SwitchingClassRecord]] = {}
         for record in switching_records:
@@ -388,42 +502,63 @@ def classify_signatures(
             group = grouped_records[group_key]
             reachable_counts = group[0].reachable_negative_edge_counts
             final_entries.append(
-                SignatureClassEntry(
-                    class_id=f"class-{class_number:04d}",
-                    representative_code=_bits_to_code(representative_bits),
-                    cycle_bit_code=_bits_to_code(cycle_bits),
+                _make_signature_class_entry(
+                    class_number=class_number,
                     representative_bits=representative_bits,
-                    representative_signs_by_edge_id=_bits_to_signs_by_edge_id(
-                        representative_bits,
-                        structure,
-                    ),
+                    cycle_bits=cycle_bits,
+                    structure=structure,
                     switching_orbit_size=structure.switching_orbit_size,
                     automorphism_orbit_size=len(group),
                     reachable_negative_edge_counts=reachable_counts,
                 )
             )
         combined_class_count = len(final_entries)
+        switching_class_count = len(switching_records)
+        backend_stats["automorphism_count"] = len(automorphisms)
     else:
+        switching_records = enumerate_switching_classes(
+            instance,
+            k=k,
+            include_reachable_negative_edge_counts=include_reachable_negative_edge_counts,
+            structure=structure,
+        )
         final_entries = []
         for class_number, record in enumerate(switching_records, start=1):
             final_entries.append(
-                SignatureClassEntry(
-                    class_id=f"class-{class_number:04d}",
-                    representative_code=_bits_to_code(record.representative_bits),
-                    cycle_bit_code=_bits_to_code(record.cycle_bits),
+                _make_signature_class_entry(
+                    class_number=class_number,
                     representative_bits=record.representative_bits,
-                    representative_signs_by_edge_id=_bits_to_signs_by_edge_id(
-                        record.representative_bits,
-                        structure,
-                    ),
+                    cycle_bits=record.cycle_bits,
+                    structure=structure,
                     switching_orbit_size=record.switching_orbit_size,
                     reachable_negative_edge_counts=record.reachable_negative_edge_counts,
                 )
             )
+        switching_class_count = len(switching_records)
 
     full_class_count = len(final_entries)
     emitted_entries = tuple(final_entries[:limit] if limit is not None else final_entries)
     elapsed_seconds = perf_counter() - started_at
+
+    stats: dict[str, float | int | bool | str | None] = {
+        "classification_mode": mode,
+        "classification_backend": actual_backend,
+        "jobs": jobs,
+        "elapsed_seconds": round(elapsed_seconds, 6),
+        "classification_phase_elapsed_seconds": round(elapsed_seconds, 6),
+        "emitted_class_count": len(emitted_entries),
+        "full_class_count": full_class_count,
+        "include_reachable_negative_edge_counts": include_reachable_negative_edge_counts,
+        "k_filter_applied": k is not None,
+        "limit": limit,
+        "truncated": limit is not None and len(emitted_entries) < full_class_count,
+    }
+    if actual_backend != classification_backend:
+        stats["requested_classification_backend"] = classification_backend
+    if mode == "switching+automorphism" and actual_backend == "generic":
+        stats["num_automorphisms"] = len(automorphisms)
+        stats["automorphism_count"] = len(automorphisms)
+    stats.update(backend_stats)
 
     return ClassificationResult(
         graph_name=instance.name,
@@ -433,23 +568,14 @@ def classify_signatures(
         num_components=structure.num_components,
         cycle_rank=structure.cycle_rank,
         theoretical_switching_class_count=theoretical_switching_class_count,
-        switching_class_count=len(switching_records),
+        switching_class_count=switching_class_count,
         combined_class_count=combined_class_count,
         k=k,
         bit_convention=BIT_CONVENTION,
         edge_order=tuple(edge.id for edge in structure.edge_order),
         classes=emitted_entries,
-        stats={
-            "classification_mode": mode,
-            "elapsed_seconds": round(elapsed_seconds, 6),
-            "emitted_class_count": len(emitted_entries),
-            "full_class_count": full_class_count,
-            "include_reachable_negative_edge_counts": include_reachable_negative_edge_counts,
-            "k_filter_applied": k is not None,
-            "limit": limit,
-            "num_automorphisms": len(automorphisms) if mode == "switching+automorphism" else None,
-            "truncated": limit is not None and len(emitted_entries) < full_class_count,
-        },
+        classification_backend=actual_backend,
+        stats=stats,
     )
 
 
@@ -479,21 +605,50 @@ def classify_and_optimize_representatives(
     instance: SignedGraphInstance,
     *,
     mode: ClassificationMode = "switching-only",
+    classification_backend: ClassificationBackend = "generic",
+    jobs: int = 1,
     k: int | None = None,
     limit: int | None = None,
     timeout_ms: int | None = None,
 ) -> ClassificationResult:
+    classification_started_at = perf_counter()
     classification_result = classify_signatures(
         instance,
         mode=mode,
+        classification_backend=classification_backend,
+        jobs=jobs,
         k=k,
         limit=limit,
         include_reachable_negative_edge_counts=(k is None),
     )
+    classification_phase_elapsed_seconds = perf_counter() - classification_started_at
     edge_by_id = instance.edge_by_id
     delta = instance.max_degree()
-    optimized_entries: list[SignatureClassEntry] = []
+    optimization_started_at = perf_counter()
+    optimization_results_by_class_id: dict[str, OptimizationResult] = {}
+    tasks = tuple(
+        (
+            instance,
+            entry.class_id,
+            entry.representative_signs_by_edge_id,
+            timeout_ms,
+        )
+        for entry in classification_result.classes
+    )
+    if jobs > 1 and classification_result.classes:
+        with ProcessPoolExecutor(max_workers=jobs) as executor:
+            for class_id, optimization_result in executor.map(
+                _solve_class_entry_optimization_task,
+                tasks,
+            ):
+                optimization_results_by_class_id[class_id] = optimization_result
+    else:
+        for task in tasks:
+            class_id, optimization_result = _solve_class_entry_optimization_task(task)
+            optimization_results_by_class_id[class_id] = optimization_result
+    optimization_phase_elapsed_seconds = perf_counter() - optimization_started_at
 
+    optimized_entries: list[SignatureClassEntry] = []
     for entry in classification_result.classes:
         negative_edge_ids = tuple(
             edge_id
@@ -503,13 +658,7 @@ def classify_and_optimize_representatives(
         negative_edges = tuple(
             (edge_id, edge_by_id[edge_id].u, edge_by_id[edge_id].v) for edge_id in negative_edge_ids
         )
-
-        representative_instance = build_signed_instance(
-            instance,
-            entry.representative_signs_by_edge_id,
-            name=f"{instance.name}_{entry.class_id}",
-        )
-        optimization_result = solve_optimization(representative_instance, timeout_ms=timeout_ms)
+        optimization_result = optimization_results_by_class_id[entry.class_id]
         best_r = optimization_result.best_r
         best_r_minus_delta = best_r - delta if best_r is not None else None
         best_r_over_delta = (
@@ -566,7 +715,13 @@ def classify_and_optimize_representatives(
         {
             "optimize_representatives": True,
             "optimize_timeout_ms": timeout_ms,
+            "jobs": jobs,
             "optimized_class_count": len(finalized_entries),
+            "classification_phase_elapsed_seconds": round(
+                classification_phase_elapsed_seconds,
+                6,
+            ),
+            "optimization_phase_elapsed_seconds": round(optimization_phase_elapsed_seconds, 6),
         }
     )
 

@@ -10,6 +10,7 @@ import networkx as nx
 Sign = Literal["+", "-"]
 Mode = Literal["decide", "optimize"]
 ClassificationMode = Literal["switching-only", "switching+automorphism"]
+ClassificationBackend = Literal["generic", "native-orbit-search"]
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,8 @@ class VerificationResult:
 class ClassificationRequest:
     instance_path: Path
     classification_mode: ClassificationMode = "switching-only"
+    classification_backend: ClassificationBackend = "generic"
+    jobs: int = 1
     k: int | None = None
     limit: int | None = None
     emit_representatives: bool = False
@@ -156,6 +159,12 @@ class ClassificationRequest:
     def __post_init__(self) -> None:
         if self.classification_mode not in {"switching-only", "switching+automorphism"}:
             raise ValueError(f"Unsupported classification mode: {self.classification_mode!r}.")
+        if self.classification_backend not in {"generic", "native-orbit-search"}:
+            raise ValueError(
+                f"Unsupported classification backend: {self.classification_backend!r}."
+            )
+        if self.jobs <= 0:
+            raise ValueError("jobs must be positive.")
         if self.k is not None and self.k < 0:
             raise ValueError("k must be non-negative when provided.")
         if self.limit is not None and self.limit <= 0:
@@ -201,6 +210,7 @@ class ClassificationResult:
     bit_convention: str
     edge_order: tuple[str, ...]
     classes: tuple[SignatureClassEntry, ...]
+    classification_backend: ClassificationBackend = "generic"
     optimize_representatives: bool = False
     optimized_class_count: int | None = None
     delta: int | None = None

@@ -127,6 +127,37 @@ def _extract_witness(
     return Witness(r=r_value, base_colors=base_colors, incidence_colors=incidence_colors)
 
 
+def _make_decision_solver(
+    *,
+    timeout_ms: int | None,
+    prefer_qf_lra: bool = True,
+) -> tuple[z3.Solver, str]:
+    if prefer_qf_lra:
+        try:
+            solver = z3.SolverFor("QF_LRA")
+        except z3.Z3Exception:
+            solver = z3.Solver()
+            solver_kind = "generic"
+        else:
+            solver_kind = "qf_lra"
+    else:
+        solver = z3.Solver()
+        solver_kind = "generic"
+
+    if timeout_ms is not None:
+        solver.set(timeout=timeout_ms)
+
+    return solver, solver_kind
+
+
+def _remaining_timeout_ms(*, timeout_ms: int | None, started_at: float) -> int | None:
+    if timeout_ms is None:
+        return None
+
+    elapsed_ms = int((perf_counter() - started_at) * 1000)
+    return timeout_ms - elapsed_ms
+
+
 def solve_decision(
     instance: SignedGraphInstance,
     *,
@@ -154,15 +185,20 @@ def solve_decision(
             },
         )
 
-    solver = z3.Solver()
-    if timeout_ms is not None:
-        solver.set(timeout=timeout_ms)
+    solver, solver_kind = _make_decision_solver(timeout_ms=timeout_ms)
+    try:
+        context = _build_model(instance, solver, optimize_r=False, fixed_r=r)
 
-    context = _build_model(instance, solver, optimize_r=False, fixed_r=r)
+        started_at = perf_counter()
+        status = solver.check()
+        elapsed_seconds = perf_counter() - started_at
+    except z3.Z3Exception:
+        solver, solver_kind = _make_decision_solver(timeout_ms=timeout_ms, prefer_qf_lra=False)
+        context = _build_model(instance, solver, optimize_r=False, fixed_r=r)
 
-    started_at = perf_counter()
-    status = solver.check()
-    elapsed_seconds = perf_counter() - started_at
+        started_at = perf_counter()
+        status = solver.check()
+        elapsed_seconds = perf_counter() - started_at
 
     witness = None
     feasible = status == z3.sat
@@ -184,6 +220,7 @@ def solve_decision(
         "num_vertex_pair_constraints": context.vertex_pair_constraints,
         "elapsed_seconds": round(elapsed_seconds, 6),
         "timeout_ms": timeout_ms,
+        "solver_kind": solver_kind,
     }
     if status == z3.unknown:
         stats["reason_unknown"] = solver.reason_unknown()
@@ -202,6 +239,7 @@ def solve_optimization(
     *,
     timeout_ms: int | None = None,
 ) -> OptimizationResult:
+    total_started_at = perf_counter()
     lower_bound, upper_bound = compute_bounds(instance)
 
     if not instance.edges:
@@ -223,16 +261,84 @@ def solve_optimization(
             },
         )
 
+    lower_bound_decision = solve_decision(instance, r=lower_bound, timeout_ms=timeout_ms)
+    lower_bound_decision_elapsed_seconds = float(
+        lower_bound_decision.stats.get("elapsed_seconds", 0.0)
+    )
+    if lower_bound_decision.feasible:
+        total_elapsed_seconds = perf_counter() - total_started_at
+        stats: dict[str, Any] = {
+            "mode": "optimize",
+            "status": lower_bound_decision.status,
+            "lower_bound": lower_bound,
+            "upper_bound": upper_bound,
+            "num_vertices": len(instance.vertices),
+            "num_edges": len(instance.edges),
+            "num_vertex_pair_constraints": lower_bound_decision.stats[
+                "num_vertex_pair_constraints"
+            ],
+            "elapsed_seconds": round(total_elapsed_seconds, 6),
+            "timeout_ms": timeout_ms,
+            "best_r": lower_bound,
+            "optimization_strategy": "lower-bound-short-circuit",
+            "lower_bound_decision_status": lower_bound_decision.status,
+            "lower_bound_decision_elapsed_seconds": lower_bound_decision_elapsed_seconds,
+        }
+        if "solver_kind" in lower_bound_decision.stats:
+            stats["decision_solver_kind"] = lower_bound_decision.stats["solver_kind"]
+
+        return OptimizationResult(
+            best_r=lower_bound,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            witness=lower_bound_decision.witness,
+            status=lower_bound_decision.status,
+            stats=stats,
+        )
+
+    remaining_timeout_ms = _remaining_timeout_ms(timeout_ms=timeout_ms, started_at=total_started_at)
+    if remaining_timeout_ms is not None and remaining_timeout_ms <= 0:
+        total_elapsed_seconds = perf_counter() - total_started_at
+        stats = {
+            "mode": "optimize",
+            "status": "unknown",
+            "lower_bound": lower_bound,
+            "upper_bound": upper_bound,
+            "num_vertices": len(instance.vertices),
+            "num_edges": len(instance.edges),
+            "num_vertex_pair_constraints": lower_bound_decision.stats[
+                "num_vertex_pair_constraints"
+            ],
+            "elapsed_seconds": round(total_elapsed_seconds, 6),
+            "timeout_ms": timeout_ms,
+            "optimization_strategy": "lower-bound-timeout",
+            "lower_bound_decision_status": lower_bound_decision.status,
+            "lower_bound_decision_elapsed_seconds": lower_bound_decision_elapsed_seconds,
+            "reason_unknown": "timeout exhausted after lower-bound screening",
+        }
+        if "solver_kind" in lower_bound_decision.stats:
+            stats["decision_solver_kind"] = lower_bound_decision.stats["solver_kind"]
+
+        return OptimizationResult(
+            best_r=None,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            witness=None,
+            status="unknown",
+            stats=stats,
+        )
+
     optimizer = z3.Optimize()
-    if timeout_ms is not None:
-        optimizer.set(timeout=timeout_ms)
+    if remaining_timeout_ms is not None:
+        optimizer.set(timeout=max(1, remaining_timeout_ms))
 
     context = _build_model(instance, optimizer, optimize_r=True)
     objective = optimizer.minimize(context.r_expr)
 
-    started_at = perf_counter()
+    optimize_started_at = perf_counter()
     status = optimizer.check()
-    elapsed_seconds = perf_counter() - started_at
+    optimize_elapsed_seconds = perf_counter() - optimize_started_at
+    total_elapsed_seconds = perf_counter() - total_started_at
 
     best_r = None
     witness = None
@@ -257,9 +363,15 @@ def solve_optimization(
         "num_vertices": len(instance.vertices),
         "num_edges": len(instance.edges),
         "num_vertex_pair_constraints": context.vertex_pair_constraints,
-        "elapsed_seconds": round(elapsed_seconds, 6),
+        "elapsed_seconds": round(total_elapsed_seconds, 6),
         "timeout_ms": timeout_ms,
+        "optimization_strategy": "full-optimize",
+        "lower_bound_decision_status": lower_bound_decision.status,
+        "lower_bound_decision_elapsed_seconds": lower_bound_decision_elapsed_seconds,
+        "optimize_elapsed_seconds": round(optimize_elapsed_seconds, 6),
     }
+    if "solver_kind" in lower_bound_decision.stats:
+        stats["decision_solver_kind"] = lower_bound_decision.stats["solver_kind"]
     if best_r is not None:
         stats["best_r"] = best_r
     if status == z3.unknown:

@@ -76,6 +76,8 @@ def _build_classification_request_from_args(args: argparse.Namespace) -> Classif
         payload = {
             "instance_path": str(request.instance_path),
             "classification_mode": request.classification_mode,
+            "classification_backend": request.classification_backend,
+            "jobs": request.jobs,
             "k": request.k,
             "limit": request.limit,
             "emit_representatives": request.emit_representatives,
@@ -88,6 +90,10 @@ def _build_classification_request_from_args(args: argparse.Namespace) -> Classif
         payload["instance_path"] = str(Path(args.instance).resolve())
     if args.mode is not None:
         payload["classification_mode"] = args.mode
+    if args.classification_backend is not None:
+        payload["classification_backend"] = args.classification_backend
+    if args.jobs is not None:
+        payload["jobs"] = args.jobs
     if args.k is not None:
         payload["k"] = args.k
     if args.limit is not None:
@@ -107,6 +113,8 @@ def _build_classification_request_from_args(args: argparse.Namespace) -> Classif
     return ClassificationRequest(
         instance_path=Path(payload["instance_path"]),
         classification_mode=payload.get("classification_mode", "switching-only"),
+        classification_backend=payload.get("classification_backend", "generic"),
+        jobs=payload.get("jobs", 1),
         k=payload.get("k"),
         limit=payload.get("limit"),
         emit_representatives=payload.get("emit_representatives", False),
@@ -179,6 +187,23 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("switching-only", "switching+automorphism"),
         default=None,
         help="Classification mode.",
+    )
+    classify_parser.add_argument(
+        "--classification-backend",
+        choices=("generic", "native-orbit-search"),
+        default=None,
+        help=(
+            "Classification backend. "
+            "native-orbit-search is available only for switching+automorphism."
+        ),
+    )
+    classify_parser.add_argument(
+        "--jobs",
+        type=int,
+        help=(
+            "Worker count. Used by native-orbit-search classification and by "
+            "--optimize-representatives aggregation."
+        ),
     )
     classify_parser.add_argument(
         "--k",
@@ -269,6 +294,8 @@ def _run_classify_signatures(args: argparse.Namespace) -> int:
         result = classify_and_optimize_representatives(
             instance,
             mode=request.classification_mode,
+            classification_backend=request.classification_backend,
+            jobs=request.jobs,
             k=request.k,
             limit=request.limit,
             timeout_ms=request.optimize_timeout_ms,
@@ -277,12 +304,15 @@ def _run_classify_signatures(args: argparse.Namespace) -> int:
         result = classify_signatures(
             instance,
             mode=request.classification_mode,
+            classification_backend=request.classification_backend,
+            jobs=request.jobs,
             k=request.k,
             limit=request.limit,
         )
     run_dir = write_classification_artifacts(request, instance, result)
 
     print(f"mode: {result.classification_mode}")
+    print(f"backend: {result.classification_backend}")
     print(f"switching_class_count: {result.switching_class_count}")
     if result.combined_class_count is not None:
         print(f"combined_class_count: {result.combined_class_count}")

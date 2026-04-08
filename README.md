@@ -6,7 +6,7 @@
 
 This repository studies exact circular edge coloring on signed graphs. It supports exact feasibility checking and optimization for concrete signed instances `(G, σ)`, and it also supports exact signature classification on a fixed base graph up to switching, or up to switching plus graph automorphism.
 
-The current classification workflow uses one generic exact backend. It is intended for small and medium base graphs; large dense families such as `K_{6,6}` are not currently treated by a specialized backend in this branch.
+This branch now supports both the generic exact classifier and the `native-orbit-search` backend for `switching+automorphism`. That native backend makes large dense classification tasks such as `K_{6,6}` practical at the classification stage; the longer pole then shifts to exact per-class solving.
 
 ## Quick Start / 快速开始
 
@@ -80,13 +80,31 @@ Classify and immediately optimize every emitted representative:
 python -m signedcoloring classify-signatures --instance data/instances/cycle_c4_one_negative.json --mode switching+automorphism --optimize-representatives
 ```
 
+Use the native backend on larger `switching+automorphism` runs:
+
+```powershell
+python -m signedcoloring classify-signatures --instance artifacts/runs/k66_base_temp.json --mode switching+automorphism --classification-backend native-orbit-search --jobs 32
+```
+
 `--mode switching-only` keeps only switching equivalence. `--mode switching+automorphism` takes a further quotient by automorphisms of the base graph. `--k` keeps only those classes whose switching orbit contains at least one representative with exactly `k` negative edges.
 
 `--mode switching-only` 只按 switching 等价分类；`--mode switching+automorphism` 会进一步按底图自同构取商；`--k` 表示只保留那些 switching 轨道中至少存在一个恰有 `k` 条负边代表的类。
 
-When `--optimize-representatives` is enabled, the command classifies the base graph, runs exact `optimize` on every emitted class representative, and aggregates the class-wise minimum `r` values. The aggregated output records both the smallest and the largest values among those class-wise minima.
+When `--optimize-representatives` is enabled, the command classifies the base graph, runs exact `optimize` on every emitted class representative, and aggregates the class-wise minimum `r` values. The aggregated output records both the smallest and the largest values among those class-wise minima. The current `optimize` path first checks feasibility at the lower bound and only falls back to full optimization when that screening is inconclusive or infeasible.
 
 This branch deliberately keeps `classify-signatures` as a single generic entrypoint. It does not add graph-family-specific modes or a complete-bipartite specialized backend.
+
+## Practical Scale Notes / 实际规模说明
+
+The generic classifier remains exact but expensive. On a larger server, single runs may become faster, but the generic `switching+automorphism` path still scales poorly as `beta` grows. The `native-orbit-search` backend changes the classification picture for larger dense base graphs, but representative-level exact solving can still dominate the runtime.
+
+当前的 generic 分类后端仍然是精确的，但代价较高。更强的服务器通常会让单次运行更快一些，不过 generic 的 `switching+automorphism` 路径在 `beta` 增大时仍会很快变重。`native-orbit-search` 已经改变了大规模稠密底图在“分类阶段”的可行性，但代表元层面的精确求解仍然可能成为主要耗时。
+
+- As a practical rule of thumb, `beta <= 9` is usually comfortable under the generic backend.
+- `beta ≈ 10-14` is a boundary zone for `generic` and depends heavily on automorphism size, `--k`, and whether `--optimize-representatives` is enabled.
+- `beta >= 20` is usually unrealistic for the generic `switching+automorphism` workflow, even on a stronger server.
+- Existing anchors match this rule for `generic`: Petersen (`beta = 6`) and `K_{4,4}` (`beta = 9`) are practical; `K_{6,6}` (`beta = 25`) is not.
+- Under `native-orbit-search`, `K_{6,6}` classification becomes practical; the main bottleneck then shifts from classification to exact per-class `r` solving.
 
 ## Example Workflow / 示例工作流
 
@@ -210,7 +228,7 @@ scripts/            Thin wrappers only
 ## Documentation / 相关文档
 
 - [docs/model.md](docs/model.md): solver model and signature-classification model
-- [docs/workflow.md](docs/workflow.md): recommended experiment workflow and output organization
+- [docs/workflow.md](docs/workflow.md): recommended experiment workflow, output organization, and practical scale notes for the current generic backend
 
 ## README Maintenance / README 维护原则
 

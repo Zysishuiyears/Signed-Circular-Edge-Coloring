@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from signedcoloring.classification_native import native_module_available
 from signedcoloring.cli import main
 
 
@@ -127,3 +130,41 @@ def test_classify_signatures_cli_can_optimize_representatives(tmp_path: Path) ->
     assert classes["class-0002"]["attains_global_max_best_r"] is True
     assert "witness" in classes["class-0002"]
     assert "optimize_run_dir" in classes["class-0002"]
+
+
+@pytest.mark.skipif(
+    not native_module_available(),
+    reason="native classification extension is unavailable",
+)
+def test_classify_signatures_cli_supports_native_backend(tmp_path: Path) -> None:
+    instance_path = (
+        Path(__file__).resolve().parents[1] / "data" / "instances" / "cycle_c4_one_negative.json"
+    )
+
+    exit_code = main(
+        [
+            "classify-signatures",
+            "--instance",
+            str(instance_path),
+            "--mode",
+            "switching+automorphism",
+            "--classification-backend",
+            "native-orbit-search",
+            "--jobs",
+            "2",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+
+    run_dirs = [path for path in tmp_path.iterdir() if path.is_dir()]
+    assert len(run_dirs) == 1
+
+    summary = json.loads((run_dirs[0] / "summary.json").read_text(encoding="utf-8"))
+    assert summary["classification_backend"] == "native-orbit-search"
+    assert summary["combined_class_count"] == 2
+    assert summary["stats"]["jobs"] == 2
+    assert summary["stats"]["native_jobs_used"] == 1
+    assert summary["stats"]["native_algorithm"] == "generator-orbit-scan"
