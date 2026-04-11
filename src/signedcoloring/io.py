@@ -301,6 +301,23 @@ def _class_entry_payload(
         "representative_bits": list(entry.representative_bits),
         "representative_signs_by_edge_id": dict(entry.representative_signs_by_edge_id),
     }
+    if entry.preferred_representative_code is not None:
+        payload["preferred_representative_code"] = entry.preferred_representative_code
+    if entry.preferred_representative_bits is not None:
+        payload["preferred_representative_bits"] = list(entry.preferred_representative_bits)
+    if entry.preferred_representative_signs_by_edge_id is not None:
+        payload["preferred_representative_signs_by_edge_id"] = dict(
+            entry.preferred_representative_signs_by_edge_id
+        )
+    if entry.preferred_negative_edge_ids is not None:
+        payload["preferred_negative_edge_ids"] = list(entry.preferred_negative_edge_ids)
+    if entry.preferred_negative_edges is not None:
+        payload["preferred_negative_edges"] = [
+            {"edge_id": edge_id, "u": u, "v": v}
+            for edge_id, u, v in entry.preferred_negative_edges
+        ]
+    if entry.preferred_negative_edge_count is not None:
+        payload["preferred_negative_edge_count"] = entry.preferred_negative_edge_count
     if entry.switching_orbit_size is not None:
         payload["switching_orbit_size"] = entry.switching_orbit_size
     if entry.automorphism_orbit_size is not None:

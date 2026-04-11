@@ -26,6 +26,7 @@ from signedcoloring.models import ClassificationRequest, SolveRequest
 from signedcoloring.rational import parse_fraction
 from signedcoloring.solver import solve_decision, solve_optimization
 from signedcoloring.verify import verify_witness
+from signedcoloring.visualization import render_classification_figures
 
 
 def _build_request_from_args(args: argparse.Namespace, mode: str) -> SolveRequest:
@@ -239,6 +240,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Root directory for run artifacts.",
     )
 
+    render_parser = subparsers.add_parser(
+        "render-classification-figures",
+        help="Render SVG figures for classes in a classify-signatures run directory.",
+    )
+    render_parser.add_argument(
+        "--run-dir",
+        type=Path,
+        required=True,
+        help="Path to a classify-signatures run directory containing classes.json.",
+    )
+    render_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Output directory for SVG figures. Defaults to <run-dir>/figures.",
+    )
+    render_parser.add_argument(
+        "--class-id",
+        dest="class_ids",
+        action="append",
+        default=None,
+        help="Class id to render. Repeat the flag to render multiple classes.",
+    )
+
     return parser
 
 
@@ -333,6 +357,19 @@ def _run_classify_signatures(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_render_classification_figures(args: argparse.Namespace) -> int:
+    output_dir, rendered_paths = render_classification_figures(
+        run_dir=Path(args.run_dir),
+        output_dir=Path(args.output_dir) if args.output_dir is not None else None,
+        class_ids=tuple(args.class_ids or ()),
+    )
+    print(f"rendered_count: {len(rendered_paths)}")
+    print(f"output_dir: {output_dir}")
+    for path in rendered_paths:
+        print(path)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -346,6 +383,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_verify(args)
         if args.command == "classify-signatures":
             return _run_classify_signatures(args)
+        if args.command == "render-classification-figures":
+            return _run_render_classification_figures(args)
     except Exception as exc:  # noqa: BLE001
         print(f"error: {exc}", file=sys.stderr)
         return 2

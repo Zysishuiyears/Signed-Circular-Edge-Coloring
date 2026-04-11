@@ -105,6 +105,24 @@ def _petersen_instance() -> SignedGraphInstance:
     return _make_instance("petersen", vertices, edge_specs)
 
 
+def _c3_square_c3_instance() -> SignedGraphInstance:
+    vertices = tuple(f"v{row}{column}" for row in range(3) for column in range(3))
+    endpoint_pairs: set[tuple[str, str]] = set()
+    for row in range(3):
+        for column in range(3):
+            vertex = f"v{row}{column}"
+            right = f"v{row}{(column + 1) % 3}"
+            down = f"v{(row + 1) % 3}{column}"
+            endpoint_pairs.add(tuple(sorted((vertex, right))))
+            endpoint_pairs.add(tuple(sorted((vertex, down))))
+
+    edges = tuple(
+        (f"e{index:02d}", left, right, "+")
+        for index, (left, right) in enumerate(sorted(endpoint_pairs), start=1)
+    )
+    return _make_instance("c3_square_c3", vertices, edges)
+
+
 def _complete_bipartite_instance(left_size: int, right_size: int) -> SignedGraphInstance:
     left = tuple(f"a{i}" for i in range(1, left_size + 1))
     right = tuple(f"b{i}" for i in range(1, right_size + 1))
@@ -281,6 +299,9 @@ def test_native_orbit_search_matches_generic_backend() -> None:
         assert [entry.reachable_negative_edge_counts for entry in native.classes] == [
             entry.reachable_negative_edge_counts for entry in generic.classes
         ]
+        assert [entry.preferred_representative_code for entry in native.classes] == [
+            entry.preferred_representative_code for entry in generic.classes
+        ]
 
 
 @pytest.mark.skipif(
@@ -369,3 +390,23 @@ def test_single_class_can_attain_both_global_min_and_max_best_r() -> None:
     assert result.global_min_best_r == result.global_max_best_r == entry.best_r
     assert entry.attains_global_min_best_r is True
     assert entry.attains_global_max_best_r is True
+
+
+def test_preferred_display_representatives_track_minimum_negative_edges() -> None:
+    result = classify_signatures(
+        _c3_square_c3_instance(),
+        mode="switching+automorphism",
+        include_reachable_negative_edge_counts=True,
+    )
+
+    assert result.stats["preferred_representatives_exact"] is True
+
+    found_strict_improvement = False
+    for entry in result.classes:
+        assert entry.preferred_negative_edge_count == min(
+            entry.reachable_negative_edge_counts or ()
+        )
+        if entry.preferred_negative_edge_count < sum(entry.representative_bits):
+            found_strict_improvement = True
+
+    assert found_strict_improvement is True

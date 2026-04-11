@@ -23,6 +23,7 @@ from signedcoloring.solver import solve_optimization
 POSITIVE_BIT = 0
 NEGATIVE_BIT = 1
 BIT_CONVENTION = "0=+,1=-"
+EXACT_PREFERRED_SWITCHING_CLASS_LIMIT = 1 << 12
 
 
 @dataclass(frozen=True)
@@ -241,6 +242,82 @@ def _bits_to_signs_by_edge_id(
     return signs
 
 
+def _negative_edge_ids_from_bits(
+    bits: tuple[int, ...],
+    structure: _GraphStructure,
+) -> tuple[str, ...]:
+    return tuple(
+        edge.id
+        for bit, edge in zip(bits, structure.edge_order, strict=True)
+        if bit == NEGATIVE_BIT
+    )
+
+
+def _negative_edges_from_ids(
+    edge_ids: tuple[str, ...],
+    structure: _GraphStructure,
+) -> tuple[tuple[str, str, str], ...]:
+    edge_by_id = {edge.id: edge for edge in structure.edge_order}
+    return tuple((edge_id, edge_by_id[edge_id].u, edge_by_id[edge_id].v) for edge_id in edge_ids)
+
+
+def _switch_flags_from_mask(mask: int, structure: _GraphStructure) -> tuple[int, ...]:
+    switch_flags = [0] * len(structure.vertex_order)
+    for offset, vertex_index in enumerate(structure.free_vertex_indices):
+        if (mask >> offset) & 1:
+            switch_flags[vertex_index] = 1
+    return tuple(switch_flags)
+
+
+def _preferred_display_bits_from_switching_class_reps(
+    representative_bits_orbit: tuple[tuple[int, ...], ...],
+    structure: _GraphStructure,
+) -> tuple[int, ...]:
+    best_bits: tuple[int, ...] | None = None
+    free_switch_count = 1 << len(structure.free_vertex_indices)
+
+    for switching_class_bits in representative_bits_orbit:
+        for mask in range(free_switch_count):
+            switch_flags = _switch_flags_from_mask(mask, structure)
+            candidate_bits = _apply_switch_flags(
+                switching_class_bits,
+                switch_flags,
+                structure,
+            )
+            if best_bits is None:
+                best_bits = candidate_bits
+                continue
+            candidate_key = (sum(candidate_bits), candidate_bits)
+            best_key = (sum(best_bits), best_bits)
+            if candidate_key < best_key:
+                best_bits = candidate_bits
+
+    if best_bits is None:
+        raise ValueError("At least one representative is required to compute a preferred display.")
+
+    return best_bits
+
+
+def _entry_with_preferred_display_bits(
+    entry: SignatureClassEntry,
+    preferred_bits: tuple[int, ...],
+    structure: _GraphStructure,
+) -> SignatureClassEntry:
+    preferred_negative_edge_ids = _negative_edge_ids_from_bits(preferred_bits, structure)
+    return replace(
+        entry,
+        preferred_representative_code=_bits_to_code(preferred_bits),
+        preferred_representative_bits=preferred_bits,
+        preferred_representative_signs_by_edge_id=_bits_to_signs_by_edge_id(
+            preferred_bits,
+            structure,
+        ),
+        preferred_negative_edge_ids=preferred_negative_edge_ids,
+        preferred_negative_edges=_negative_edges_from_ids(preferred_negative_edge_ids, structure),
+        preferred_negative_edge_count=len(preferred_negative_edge_ids),
+    )
+
+
 def _reachable_negative_edge_counts(
     representative_bits: tuple[int, ...],
     structure: _GraphStructure,
@@ -273,7 +350,7 @@ def _make_signature_class_entry(
     automorphism_orbit_size: int | None = None,
     reachable_negative_edge_counts: tuple[int, ...] | None = None,
 ) -> SignatureClassEntry:
-    return SignatureClassEntry(
+    entry = SignatureClassEntry(
         class_id=f"class-{class_number:04d}",
         representative_code=_bits_to_code(representative_bits),
         cycle_bit_code=_bits_to_code(cycle_bits),
@@ -286,6 +363,7 @@ def _make_signature_class_entry(
         automorphism_orbit_size=automorphism_orbit_size,
         reachable_negative_edge_counts=reachable_negative_edge_counts,
     )
+    return _entry_with_preferred_display_bits(entry, representative_bits, structure)
 
 
 def _solve_class_entry_optimization_task(
@@ -387,6 +465,89 @@ def canonical_combined_rep(
     if best_bits is None:
         raise ValueError("At least one automorphism is required.")
     return best_bits
+
+
+def _build_exact_preferred_orbits(
+    instance: SignedGraphInstance,
+    *,
+    mode: ClassificationMode,
+    structure: _GraphStructure,
+) -> dict[tuple[int, ...], tuple[tuple[int, ...], ...]]:
+    if mode == "switching-only":
+        switching_records = enumerate_switching_classes(instance, structure=structure)
+        return {
+            record.representative_bits: (record.representative_bits,)
+            for record in switching_records
+        }
+
+    switching_records = enumerate_switching_classes(instance, structure=structure)
+    automorphisms = compute_automorphisms(instance, structure=structure)
+    grouped_records: dict[tuple[int, ...], list[tuple[int, ...]]] = {}
+    for record in switching_records:
+        combined_bits = canonical_combined_rep(
+            record.representative_bits,
+            structure,
+            automorphisms,
+        )
+        grouped_records.setdefault(combined_bits, []).append(record.representative_bits)
+
+    return {
+        combined_bits: tuple(representatives)
+        for combined_bits, representatives in grouped_records.items()
+    }
+
+
+def _attach_preferred_display_representatives(
+    instance: SignedGraphInstance,
+    *,
+    mode: ClassificationMode,
+    classification_backend: ClassificationBackend,
+    structure: _GraphStructure,
+    theoretical_switching_class_count: int,
+    entries: tuple[SignatureClassEntry, ...],
+) -> tuple[tuple[SignatureClassEntry, ...], dict[str, bool | int | str]]:
+    if not entries:
+        return entries, {
+            "preferred_representatives_available": True,
+            "preferred_representatives_exact": True,
+            "preferred_representative_strategy": "minimum-negative-orbit-search",
+        }
+
+    exact_preferred = (
+        mode == "switching-only"
+        or classification_backend == "generic"
+        or theoretical_switching_class_count <= EXACT_PREFERRED_SWITCHING_CLASS_LIMIT
+    )
+
+    if exact_preferred:
+        preferred_orbits = _build_exact_preferred_orbits(
+            instance,
+            mode=mode,
+            structure=structure,
+        )
+        finalized_entries = tuple(
+            _entry_with_preferred_display_bits(
+                entry,
+                _preferred_display_bits_from_switching_class_reps(
+                    preferred_orbits.get(entry.representative_bits, (entry.representative_bits,)),
+                    structure,
+                ),
+                structure,
+            )
+            for entry in entries
+        )
+        return finalized_entries, {
+            "preferred_representatives_available": True,
+            "preferred_representatives_exact": True,
+            "preferred_representative_strategy": "minimum-negative-orbit-search",
+        }
+
+    return entries, {
+        "preferred_representatives_available": True,
+        "preferred_representatives_exact": False,
+        "preferred_representative_strategy": "canonical-fallback",
+        "preferred_exact_switching_class_limit": EXACT_PREFERRED_SWITCHING_CLASS_LIMIT,
+    }
 
 
 def _enumerate_native_combined_classes(
@@ -536,6 +697,14 @@ def classify_signatures(
             )
         switching_class_count = len(switching_records)
 
+    final_entries, preferred_stats = _attach_preferred_display_representatives(
+        instance,
+        mode=mode,
+        classification_backend=actual_backend,
+        structure=structure,
+        theoretical_switching_class_count=theoretical_switching_class_count,
+        entries=tuple(final_entries),
+    )
     full_class_count = len(final_entries)
     emitted_entries = tuple(final_entries[:limit] if limit is not None else final_entries)
     elapsed_seconds = perf_counter() - started_at
@@ -559,6 +728,7 @@ def classify_signatures(
         stats["num_automorphisms"] = len(automorphisms)
         stats["automorphism_count"] = len(automorphisms)
     stats.update(backend_stats)
+    stats.update(preferred_stats)
 
     return ClassificationResult(
         graph_name=instance.name,

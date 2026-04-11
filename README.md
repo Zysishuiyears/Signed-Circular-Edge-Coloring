@@ -80,6 +80,12 @@ Classify and immediately optimize every emitted representative:
 python -m signedcoloring classify-signatures --instance data/instances/cycle_c4_one_negative.json --mode switching+automorphism --optimize-representatives
 ```
 
+Render SVG figures for all optimized classes in an existing classification run:
+
+```powershell
+python -m signedcoloring render-classification-figures --run-dir artifacts/runs/<timestamp>_cycle_c4_one_negative_classify-signatures
+```
+
 Use the native backend on larger `switching+automorphism` runs:
 
 ```powershell
@@ -91,6 +97,8 @@ python -m signedcoloring classify-signatures --instance artifacts/runs/k66_base_
 `--mode switching-only` 只按 switching 等价分类；`--mode switching+automorphism` 会进一步按底图自同构取商；`--k` 表示只保留那些 switching 轨道中至少存在一个恰有 `k` 条负边代表的类。
 
 When `--optimize-representatives` is enabled, the command classifies the base graph, runs exact `optimize` on every emitted class representative, and aggregates the class-wise minimum `r` values. The aggregated output records both the smallest and the largest values among those class-wise minima. The current `optimize` path first checks feasibility at the lower bound and only falls back to full optimization when that screening is inconclusive or infeasible.
+
+Classification output now distinguishes two representative notions. `representative_*` remains the canonical representative used for stable class identity. `preferred_*` is a display-oriented representative chosen to minimize the number of negative edges inside the same equivalence class, with lexicographic tie-breaking under the current `edge_order`.
 
 This branch deliberately keeps `classify-signatures` as a single generic entrypoint. It does not add graph-family-specific modes or a complete-bipartite specialized backend.
 
@@ -192,6 +200,10 @@ Each `classify-signatures` run writes:
 `summary.json` records graph size, component count, cycle rank, class counts, bit convention, and the deterministic edge order. `classes.json` stores stable class representatives and machine-readable metadata that can later be converted back into concrete signed instances.
 
 If `--optimize-representatives` is enabled, the same run directory also contains `optimize_runs/`, where each emitted class gets its own nested optimize artifact directory. In that mode, `summary.json` records the global minimum and global maximum among the class-wise `best_r` values, and `classes.json` includes each class representative's `best_r` and witness.
+
+`classes.json` now keeps both the canonical class identity and the display-oriented representative. The canonical fields stay under `representative_*`; the display-oriented, minimum-negative representative stays under `preferred_*`.
+
+When `render-classification-figures` is run on such a classification directory, SVG files are written to `<run-dir>/figures` by default. Each SVG uses the preferred display representative, keeps Cartesian-product vertex grids when labels carry 2D coordinates such as `v00`, `v12`, and shows half-edge colors, edge signs, and edge ids directly on the picture.
 
 ## Repository Layout / 项目结构
 

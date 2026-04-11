@@ -180,6 +180,12 @@ class SignatureClassEntry:
     cycle_bit_code: str
     representative_bits: tuple[int, ...]
     representative_signs_by_edge_id: dict[str, Sign]
+    preferred_representative_code: str | None = None
+    preferred_representative_bits: tuple[int, ...] | None = None
+    preferred_representative_signs_by_edge_id: dict[str, Sign] | None = None
+    preferred_negative_edge_ids: tuple[str, ...] | None = None
+    preferred_negative_edges: tuple[tuple[str, str, str], ...] | None = None
+    preferred_negative_edge_count: int | None = None
     switching_orbit_size: int | None = None
     automorphism_orbit_size: int | None = None
     reachable_negative_edge_counts: tuple[int, ...] | None = None
